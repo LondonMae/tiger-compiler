@@ -28,6 +28,28 @@ public class Codegen {
     return l;
   }
 
+  private static Tree.CONST CONST16(Tree.Exp e) {
+    if (e instanceof Tree.CONST) {
+      Tree.CONST c = (Tree.CONST)e;
+      int value = c.value;
+      if (value == (short)value)
+        return c;
+    }
+    return null;
+  }
+
+  private static boolean commute(Tree.BINOP e) {
+    Tree.CONST left = CONST16(e.left);
+    Tree.CONST right = CONST16(e.right);
+    if (left == null)
+      return right != null;
+    if (right == null) {
+      e.left = e.right;
+      e.right = left;
+    }
+    return true;
+  }
+
   static Assem.Instr OPER(String a, TempList d, TempList s, LabelList j) {
     return new Assem.OPER("\t" + a, d, s, j);
   }
@@ -46,7 +68,7 @@ public class Codegen {
   }
 
   void munchStm(Tree.Stm s) {
-    if (s instanceof Tree.MOVE) 
+    if (s instanceof Tree.MOVE)
       munchStm((Tree.MOVE)s);
     else if (s instanceof Tree.UEXP)
       munchStm((Tree.UEXP)s);
@@ -61,13 +83,65 @@ public class Codegen {
   }
 
   void munchStm(Tree.MOVE s) {
-  }
+
+    if (s.dst instanceof Tree.TEMP) {
+      Tree.TEMP t = (Tree.TEMP) s.dst;
+      Temp dst = t.temp;
+
+      emit(MOVE("mov `d0 `s0",
+          t.temp, munchExp(s.src)));
+    }
+
+    if (s.dst instanceof Tree.MEM && s.src instanceof Tree.MEM) {
+      Tree.MEM l = (Tree.MEM) s.dst;
+      Tree.MEM r = (Tree.MEM) s.src;
+
+      emit(MOVE("mov `s0 `s1", munchExp(l.exp), munchExp(r.exp)));
+    }
+
+    else if (s.dst instanceof Tree.MEM) {
+      Tree.MEM mem = (Tree.MEM) s.dst;
+
+      if (mem.exp instanceof Tree.BINOP) {
+        Tree.BINOP binop = (Tree.BINOP) mem.exp;
+        if (commute(binop)) {
+
+          Tree.CONST val = (Tree.CONST) binop.right;
+          if (binop.left instanceof Tree.TEMP) {
+            Tree.TEMP t = (Tree.TEMP)binop.left;
+
+            if (t.temp == frame.FP) {
+              emit(OPER("stw `s0 " + val.value + "+"+ frame.name + "_framesize(`s1)",
+                null, L(munchExp(s.src), L(t.temp))));
+
+            }
+
+            else {
+            emit(OPER("stw `s0 " + val.value + "(`s1)",
+              null, L(munchExp(s.src), L(munchExp(binop.left)))));
+            }
+
+          }
+
+          }
+        }
+
+        else if (mem.exp instanceof Tree.CONST) {
+          Tree.CONST c = (Tree.CONST) mem.exp;
+
+          emit(OPER("stw " + c.value + "(r0) `s1",
+              null, L(munchExp(s.src), null)));
+        }
+
+      }
+}
 
   void munchStm(Tree.UEXP s) {
     munchExp(s.exp);
   }
 
   void munchStm(Tree.JUMP s) {
+      emit( new Assem.LABEL("jump" + ":", new Label()));
   }
 
   private static String[] CJUMP = new String[10];
@@ -85,9 +159,11 @@ public class Codegen {
   }
 
   void munchStm(Tree.CJUMP s) {
+      emit( new Assem.LABEL("cjump" + ":", new Label()));
   }
 
   void munchStm(Tree.LABEL l) {
+    emit( new Assem.LABEL(l.label.toString() + ":\n", l.label));
   }
 
   Temp munchExp(Tree.Exp s) {
@@ -108,10 +184,14 @@ public class Codegen {
   }
 
   Temp munchExp(Tree.CONST e) {
-    return frame.ZERO;
+    Temp r = new Temp();
+    emit(OPER("movi `d0, " + e.value,
+          L(r), null));
+    return r;
   }
 
   Temp munchExp(Tree.NAME e) {
+      emit( new Assem.LABEL("name" + ":\n", new Label()));
     return frame.ZERO;
   }
 
@@ -166,11 +246,34 @@ public class Codegen {
   }
 
   Temp munchExp(Tree.BINOP e) {
-    return frame.ZERO;
+    Temp r = new Temp();
+
+    if (commute(e)) {
+      Tree.CONST val = (Tree.CONST) e.right;
+      emit(OPER(IBINOP[e.binop] + " `d0 `s0 " + val.value, L(r), L(munchExp(e.left))));
+    }
+    else
+      emit(OPER(BINOP[e.binop] + " `d0 `s0 `s1", L(r), L(munchExp(e.left), L(munchExp(e.right)))));
+
+
+    return r;
   }
 
   Temp munchExp(Tree.MEM e) {
-    return frame.ZERO;
+
+    Temp r = new Temp();
+    // if (e.exp instanceof Tree.BINOP) {
+    //   Tree.BINOP binop = (Tree.BINOP) e.exp;
+    //   if (commute(binop)) {
+    //     Tree.CONST val = (Tree.CONST) binop.right;
+    //     emit(OPER("ldw `d0 " + val.value + "(`s0)",
+    //       L(r), L(munchExp(binop.left))));
+    //     }
+    //   }
+
+    // else
+      emit( new Assem.LABEL("mem" + ":\n", new Label()));
+    return r;
   }
 
   Temp munchExp(Tree.CALL s) {
