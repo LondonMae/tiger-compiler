@@ -28,6 +28,7 @@ public class Codegen {
     return l;
   }
 
+  // make sure constant value and not more than 16 bits
   private static Tree.CONST CONST16(Tree.Exp e) {
     if (e instanceof Tree.CONST) {
       Tree.CONST c = (Tree.CONST)e;
@@ -38,6 +39,8 @@ public class Codegen {
     return null;
   }
 
+  // commute means that the expression does not
+  // have side effects on future expressions (ie. constants)
   private static boolean commute(Tree.BINOP e) {
     Tree.CONST left = CONST16(e.left);
     Tree.CONST right = CONST16(e.right);
@@ -56,18 +59,20 @@ public class Codegen {
   static Assem.Instr OPER(String a, TempList d, TempList s) {
     return new Assem.OPER("\t" + a, d, s);
   }
-
-
   static Assem.Instr MOVE(String a, Temp d, Temp s) {
     return new Assem.MOVE("\t" + a, d, s);
   }
-
   static TempList L(Temp h) {
     return new TempList(h, null);
   }
-
   static TempList L(Temp h, TempList t) {
     return new TempList(h, t);
+  }
+  static LabelList L(Label h, LabelList t) {
+    return new LabelList(h, t);
+  }
+  static LabelList L(Label h) {
+    return new LabelList(h, null);
   }
 
   void munchStm(Tree.Stm s) {
@@ -85,85 +90,84 @@ public class Codegen {
       throw new Error("Codegen.munchStm");
   }
 
-
-  // handles mem cases within a move
-  void munchStm(String op, Temp src1, Tree.MEM mem) {
-    if (mem.exp instanceof Tree.BINOP && commute((Tree.BINOP) mem.exp)) {
-        Tree.CONST val = (Tree.CONST) ((Tree.BINOP) mem.exp).right;
-        String offset = String.valueOf(val.value);
-        if (((Tree.BINOP) mem.exp).left instanceof Tree.TEMP) {
-          Tree.TEMP r = (Tree.TEMP)((Tree.BINOP) mem.exp).left;
-          Temp src2 = r.temp;
-
-          if (r.temp == frame.FP) {
-            src2 = frame.SP;
-            offset = val.value + "+"+ frame.name + "_framesize";
-          }
-
-          emit(OPER(op + " `s0, " + offset + "(`s1)",
-            null, L(src1, L(src2))));
-          }
-        else {
-          Temp src2 = munchExp(((Tree.BINOP) mem.exp).left);
-          emit(OPER(op + " `s0, " + offset + "(`s1)",
-            null, L(src1, L(src2))));
-        }
-      }
-
-
-
-    else if (mem.exp instanceof Tree.CONST) {
-      Tree.CONST c = (Tree.CONST) mem.exp;
-      emit(OPER(op + " `s0, " + c.value,
-        null, L(src1, null)));
-    }
-
-    else if (mem.exp instanceof Tree.TEMP) {
-
-
-          // System.out.println(op);
-      emit(OPER(op + " `s0, (`s1)",
-        null, L(src1, L(munchExp(mem.exp)))));
-    }
-    else  {
-      emit(OPER(op + " `s0, (`s1)",
-        null, L(src1, L(munchExp((mem.exp))))));
-    }
-
+  boolean isFP(Tree.Exp exp) {
+    if (exp instanceof Tree.TEMP && ((Tree.TEMP) exp).temp == frame.FP)
+      return true;
+    return false;
   }
 
+  void munchStm(String op, Temp src1, Tree.MEM mem) {
+
+    // MOVE(MEM(BINOP(PLUS, e1, CONST(i))), e2)
+    if (mem.exp instanceof Tree.BINOP && IBINOP[((Tree.BINOP) mem.exp).binop].equals("addi") && commute((Tree.BINOP) mem.exp)) {
+        // constant value
+        Tree.CONST val = (Tree.CONST) ((Tree.BINOP) mem.exp).right;
+        String offset = String.valueOf(val.value);
+
+        // if temp, we need to check if it is FP (we don't need to
+        // create new temp since this is a ldw or stw op)
+        if (isFP(((Tree.BINOP) mem.exp).left))
+          emit(OPER(op + " `s0, " + val.value + "+"+ frame.name + "_framesize" + "(`s1)",
+            null, L(src1, L(frame.SP))));
+        // this is the instr for binop with const and any other expression (will return temp)
+        else
+          emit(OPER(op + " `s0, " + val.value + "(`s1)",
+            null, L(src1, L(munchExp(((Tree.BINOP) mem.exp).left)))));
+      }
+
+      // MOVE(MEM(CONST(c)), e2)
+      else if (mem.exp instanceof Tree.CONST) {
+        Tree.CONST c = (Tree.CONST) mem.exp;
+        emit(OPER(op + " `s0, " + c.value,
+          null, L(src1, null)));
+      }
+
+      // MOVE(MEM(e1), e2)
+      // note: eq could be binop, but it does not commute,
+      // so we will not be able to make a bigger tile since
+      // we need to write put the val in a new temp
+      else  {
+        emit(OPER(op + " `s0, (`s1)",
+          null, L(src1, L(munchExp((mem.exp))))));
+      }
+  }
 
   // move something not in mem to temp
   void munchStm(Tree.TEMP temp, Tree.Exp exp) {
     Temp dst = temp.temp;
     Temp src = munchExp(exp);
 
-
+    // if trying to store in the same temp, ignore instruction
     if (dst != src)
       emit(MOVE("mov `d0, `s0", dst, src));
 }
 
-  // todo: check if temp is 0
   void munchStm(Tree.MOVE s) {
-    System.out.println("move");
+
+    // case: storeword exp
     if (s.dst instanceof Tree.MEM)
       munchStm("stw", munchExp(s.src), (Tree.MEM) s.dst);
+    // case: ldw expression
     else if (s.src instanceof Tree.MEM)
       munchStm("ldw", munchExp(s.dst), (Tree.MEM) s.src);
+    // case: move (since we already checked for mems)
     else if (s.dst instanceof Tree.TEMP)
       munchStm((Tree.TEMP)s.dst, s.src);
+    else
+      // must move to temp to stw/lsw to mem
+      throw new Error("Codegen.munchMove");
 
   }
 
+  // not much to see
   void munchStm(Tree.UEXP s) {
     munchExp(s.exp);
   }
 
+  // jump with no condition = branch to given label
   void munchStm(Tree.JUMP s) {
-      System.out.println("jump");
       Tree.NAME name = (Tree.NAME) s.exp;
-
-      emit(OPER("br " + name.label.toString(), null, null, new LabelList(name.label, null)));
+      emit(OPER("br " + name.label.toString(), null, null, L(name.label)));
   }
 
   private static String[] CJUMP = new String[10];
@@ -180,15 +184,15 @@ public class Codegen {
     CJUMP[Tree.CJUMP.UGE] = "bgeu";
   }
 
+  // branch with consitioon
   void munchStm(Tree.CJUMP s) {
-      System.out.println("cjump");
     emit(OPER(CJUMP[s.relop] + " `s0, `s1, `j0",
-      null, L(munchExp(s.left), L(munchExp(s.right))), new LabelList(s.iftrue, null)));
+      null, L(munchExp(s.left), L(munchExp(s.right))), L(s.iftrue, L(s.iffalse))));
   }
 
+  // something is happening and I am confused
   void munchStm(Tree.LABEL l) {
-      System.out.println("label");
-    emit( new Assem.LABEL(l.label.toString() + ": ", l.label));
+    emit(new Assem.LABEL(l.label.toString() + ":", l.label));
   }
 
   Temp munchExp(Tree.Exp s) {
@@ -209,10 +213,11 @@ public class Codegen {
   }
 
   Temp munchExp(Tree.CONST e) {
-      System.out.println("const");
+    // use zero reg if value is 0 (no need to use new register)
     if (e.value == 0)
       return frame.ZERO;
 
+    // store temp in register
     Temp r = new Temp();
     emit(OPER("movi `d0, " + e.value,
           L(r), null));
@@ -220,16 +225,12 @@ public class Codegen {
   }
 
   Temp munchExp(Tree.NAME e) {
-      System.out.println("name");
     Temp r = new Temp();
-    emit( OPER("movia `d0, `j0", L(r), null, new LabelList(e.label, null)));
+    emit(OPER("movia `d0, `j0", L(r), null, L(e.label)));
     return r;
   }
 
   Temp munchExp(Tree.TEMP e) {
-    System.out.println("temp");
-    System.out.println(e.temp);
-
     if (e.temp == frame.FP) {
       Temp t = new Temp();
       emit(OPER("addi `d0, `s0, " + frame.name + "_framesize",
@@ -280,11 +281,22 @@ public class Codegen {
   }
 
   Temp munchExp(String op, Tree.CONST right, Tree.TEMP left) {
+
+    String value = String.valueOf(right.value);
+    if (op.equals("muli")) {
+      System.out.println("here here");
+
+      int shift = shift(right.value);
+      System.out.println(value + " " + shift);
+      value = String.valueOf(shift);
+      op = "slli";
+    }
+
     Temp r = new Temp();
     if (left.temp == frame.FP())
-        emit(OPER(op + " `d0, `s0, " + right.value + "+" + frame.name + "_framesize", L(r), L(frame.SP)));
+        emit(OPER(op + " `d0, `s0, " + value + "+" + frame.name + "_framesize", L(r), L(frame.SP)));
     else
-      emit(OPER(op + " `d0, `s0, " + right.value, L(r), L(munchExp(left))));
+      emit(OPER(op + " `d0, `s0, " + value, L(r), L(munchExp(left))));
 
     return r;
   }
@@ -295,14 +307,42 @@ public class Codegen {
     return r;
   }
 
+  private static int shiftable(Tree.BINOP e) {
+    Tree.CONST left = CONST16(e.left);
+    Tree.CONST right = CONST16(e.right);
+    if (right != null && shift(right.value) > 0){
+      return shift(right.value);
+    }
+    if (left != null && shift(left.value) > 0) {
+      e.left = e.right;
+      e.right = left;
+      return shift(left.value);
+    }
+    return 0;
+  }
+
+  // this is chaos
   Temp munchExp(Tree.BINOP e) {
-    System.out.println("binop");
     boolean commutes = commute(e);
     if (commutes && e.left instanceof Tree.TEMP)
       return munchExp(IBINOP[e.binop], (Tree.CONST) e.right, (Tree.TEMP) e.left);
     else if (commutes) {
       Temp r = new Temp();
-      emit(OPER(IBINOP[e.binop] + " `d0, `s0, " + ((Tree.CONST)e.right).value, L(r), L(munchExp(e.left))));
+      String value = String.valueOf(((Tree.CONST)e.right).value);
+      String op = IBINOP[e.binop];
+
+      if (shiftable(e) > 0) {
+        System.out.println("muli");
+
+        int shift = shift(((Tree.CONST) e.right).value);
+
+        System.out.println(((Tree.CONST) e.right).value + " " + shift);
+        op = "slli";
+        value = String.valueOf(shift);
+
+      }
+
+      emit(OPER(op + " `d0, `s0, " + value, L(r), L(munchExp(e.left))));
       return r;
     }
     else if (e.left instanceof Tree.TEMP && e.right instanceof Tree.TEMP)
@@ -316,16 +356,14 @@ public class Codegen {
   }
 
   Temp munchExp(Tree.MEM e) {
-    System.out.println("mem");
     Temp r = new Temp();
     munchStm("ldw", r, e);
     return r;
   }
 
   Temp munchExp(Tree.CALL s) {
-    System.out.println("call");
     Tree.NAME name = (Tree.NAME) s.func;
-    emit(OPER("call `j0", L(frame.RA, L(frame.RV(), frame.callerSaves)), munchArgs(0, s.args), new LabelList(name.label, null)));
+    emit(OPER("call `j0", frame.calldefs, munchArgs(0, s.args), L(name.label)));
     return frame.RV();
   }
 
