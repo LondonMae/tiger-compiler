@@ -280,70 +280,33 @@ public class Codegen {
     return shift;
   }
 
-  Temp munchExp(String op, Tree.CONST right, Tree.TEMP left) {
 
-    String value = String.valueOf(right.value);
-    if (op.equals("muli")) {
-      //fix this
-      System.out.println("here here");
-
-      int shift = shift(right.value);
-      System.out.println(value + " " + shift);
-      value = String.valueOf(shift);
-      op = "slli";
-    }
-
-    Temp r = new Temp();
-    if (left.temp == frame.FP())
-        emit(OPER(op + " `d0, `s0, " + value + "+" + frame.name + "_framesize", L(r), L(frame.SP)));
-    else
-      emit(OPER(op + " `d0, `s0, " + value, L(r), L(munchExp(left))));
-
-    return r;
-  }
-
-  private static int shiftable(Tree.BINOP e) {
-    Tree.CONST left = CONST16(e.left);
-    Tree.CONST right = CONST16(e.right);
-    if (right != null && shift(right.value) > 0){
-      return shift(right.value);
-    }
-    if (left != null && shift(left.value) > 0) {
-      e.left = e.right;
-      e.right = left;
-      return shift(left.value);
-    }
-    return 0;
-  }
-
-  // this is chaos
+  // not as chaos
   Temp munchExp(Tree.BINOP e) {
-    if (e.right instanceof Tree.CONST && e.left instanceof Tree.TEMP)
-      return munchExp(IBINOP[e.binop], (Tree.CONST) e.right, (Tree.TEMP) e.left);
-    else if (e.right instanceof Tree.CONST) {
-      Temp r = new Temp();
-      String value = String.valueOf(((Tree.CONST)e.right).value);
+    Temp r = new Temp();
+    // dont check if commutes because this changes order of operations!
+    if (e.right instanceof Tree.CONST) {
+      Tree.CONST right = (Tree.CONST) e.right;
       String op = IBINOP[e.binop];
+      String value = String.valueOf(right.value);
+      int shift = shift(right.value);
 
-      if (shiftable(e) > 0) {
-        System.out.println("muli");
-
-        int shift = shift(((Tree.CONST) e.right).value);
-
-        System.out.println(((Tree.CONST) e.right).value + " " + shift);
-        op = "slli";
+      // shift optimization
+      if (op.equals("muli") && shift > 0) {
         value = String.valueOf(shift);
-
+        op = "slli";
       }
 
-      emit(OPER(op + " `d0, `s0, " + value, L(r), L(munchExp(e.left))));
-      return r;
+      if (isFP(e.left))
+          emit(OPER(op + " `d0, `s0, " + value + "+" + frame.name + "_framesize", L(r), L(frame.SP)));
+      else
+        emit(OPER(op + " `d0, `s0, " + value, L(r), L(munchExp(e.left))));
     }
-    else {
-      Temp r = new Temp();
+    else
       emit(OPER(BINOP[e.binop] + " `d0, `s0, `s1", L(r), L(munchExp(e.left), L(munchExp(e.right)))));
-      return r;
-    }
+
+    return r;
+
 
   }
 
@@ -355,6 +318,7 @@ public class Codegen {
 
   Temp munchExp(Tree.CALL s) {
     Tree.NAME name = (Tree.NAME) s.func;
+    // i still don't know what the calldefs change
     emit(OPER("call `j0", frame.calldefs, munchArgs(0, s.args), L(name.label)));
     return frame.RV();
   }
