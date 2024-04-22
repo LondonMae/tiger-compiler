@@ -284,6 +284,7 @@ public class Codegen {
 
     String value = String.valueOf(right.value);
     if (op.equals("muli")) {
+      //fix this
       System.out.println("here here");
 
       int shift = shift(right.value);
@@ -298,12 +299,6 @@ public class Codegen {
     else
       emit(OPER(op + " `d0, `s0, " + value, L(r), L(munchExp(left))));
 
-    return r;
-  }
-
-  Temp munchExp(String op, Tree.TEMP right, Tree.TEMP left) {
-    Temp r = new Temp();
-    emit(OPER(op + " `d0, `s0, `s1", L(r), L(munchExp(left), L(munchExp(right)))));
     return r;
   }
 
@@ -323,10 +318,9 @@ public class Codegen {
 
   // this is chaos
   Temp munchExp(Tree.BINOP e) {
-    boolean commutes = commute(e);
-    if (commutes && e.left instanceof Tree.TEMP)
+    if (e.right instanceof Tree.CONST && e.left instanceof Tree.TEMP)
       return munchExp(IBINOP[e.binop], (Tree.CONST) e.right, (Tree.TEMP) e.left);
-    else if (commutes) {
+    else if (e.right instanceof Tree.CONST) {
       Temp r = new Temp();
       String value = String.valueOf(((Tree.CONST)e.right).value);
       String op = IBINOP[e.binop];
@@ -345,8 +339,6 @@ public class Codegen {
       emit(OPER(op + " `d0, `s0, " + value, L(r), L(munchExp(e.left))));
       return r;
     }
-    else if (e.left instanceof Tree.TEMP && e.right instanceof Tree.TEMP)
-      return munchExp(BINOP[e.binop], (Tree.TEMP) e.right, (Tree.TEMP) e.left);
     else {
       Temp r = new Temp();
       emit(OPER(BINOP[e.binop] + " `d0, `s0, `s1", L(r), L(munchExp(e.left), L(munchExp(e.right)))));
