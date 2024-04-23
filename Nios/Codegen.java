@@ -127,6 +127,7 @@ public class Codegen {
       // so we will not be able to make a bigger tile since
       // we need to write put the val in a new temp
       else  {
+        System.out.println(mem.exp);
         emit(OPER(op + " `s0, (`s1)",
           null, L(src1, L(munchExp((mem.exp))))));
       }
@@ -280,20 +281,42 @@ public class Codegen {
     return shift;
   }
 
+  // could pribably do this better
+  private static boolean[] COMMUTATIVE = new boolean[10];
+  static {
+    COMMUTATIVE[Tree.BINOP.PLUS   ] = true;
+    COMMUTATIVE[Tree.BINOP.MINUS  ] = false;
+    COMMUTATIVE[Tree.BINOP.MUL    ] = true;
+    COMMUTATIVE[Tree.BINOP.DIV    ] = false;
+    COMMUTATIVE[Tree.BINOP.AND    ] = true;
+    COMMUTATIVE[Tree.BINOP.OR     ] = true;
+    COMMUTATIVE[Tree.BINOP.LSHIFT ] = false;
+    COMMUTATIVE[Tree.BINOP.RSHIFT ] = false;
+    COMMUTATIVE[Tree.BINOP.ARSHIFT] = false;
+    COMMUTATIVE[Tree.BINOP.XOR    ] = true;
+  }
+
+  private boolean immediate(Tree.BINOP e) {
+    if (COMMUTATIVE[e.binop])
+      return commute(e);
+    else
+      return (e.right instanceof Tree.CONST);
+  }
+
 
   // not as chaos
   Temp munchExp(Tree.BINOP e) {
     Temp r = new Temp();
     // dont check if commutes because this changes order of operations!
-    if (e.right instanceof Tree.CONST) {
+    if (immediate(e)) {
       Tree.CONST right = (Tree.CONST) e.right;
       String op = IBINOP[e.binop];
-      String value = String.valueOf(right.value);
+      int value = right.value;
       int shift = shift(right.value);
 
       // shift optimization
       if (op.equals("muli") && shift > 0) {
-        value = String.valueOf(shift);
+        value = shift;
         op = "slli";
       }
 
